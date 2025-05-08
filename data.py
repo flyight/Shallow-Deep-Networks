@@ -49,7 +49,56 @@ class CIFAR10:
             self.trigger_test_set = datasets.CIFAR10(root='./data', train=False, download=True, transform=self.trigger_transform)
             # self.trigger_test_set.test_labels = [5] * self.num_test
             self.trigger_test_loader = torch.utils.data.DataLoader(self.trigger_test_set, batch_size=batch_size, shuffle=False, num_workers=4)
+class CIFAR10_LT:
+    def __init__(self, batch_size=128, data_path='./data', mu=0.01, add_trigger=False):
+        self.batch_size = batch_size
+        self.img_size = 32
+        self.num_classes = 10
+        self.num_test = 10000
+        self.num_train = 50000
 
+        self.root = f'{data_path}/longtail/cifar-10'  # 存储数据集路径
+
+        # 设置数据增强
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.augmented = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(32, padding=4),
+            transforms.ToTensor(),
+            normalize
+        ])
+        self.normalized = transforms.Compose([transforms.ToTensor(), normalize])
+
+        # 加载长尾化的 CIFAR-10 数据集
+        self.trainset = torch.load(f'{self.root}/cifar10_longtail_train.pth')
+        self.testset = torch.load(f'{self.root}/cifar10_longtail_test.pth')
+
+        print(f"Trainset type: {type(self.trainset)}, Testset type: {type(self.testset)}")
+
+        # 使用 DataLoader 加载数据
+        self.aug_train_loader = torch.utils.data.DataLoader(
+            self.trainset, batch_size=batch_size, shuffle=True, num_workers=4
+        )
+        self.train_loader = torch.utils.data.DataLoader(
+            self.trainset, batch_size=batch_size, shuffle=True, num_workers=4
+        )
+        self.test_loader = torch.utils.data.DataLoader(
+            self.testset, batch_size=batch_size, shuffle=False, num_workers=4
+        )
+
+        # 添加触发器（如果需要）
+        if add_trigger:
+            self.trigger_transform = transforms.Compose([
+                AddTrigger(),
+                transforms.ToTensor(),
+                normalize
+            ])
+            self.trigger_test_set = datasets.CIFAR10(
+                root='./data', train=False, download=True, transform=self.trigger_transform
+            )
+            self.trigger_test_loader = torch.utils.data.DataLoader(
+                self.trigger_test_set, batch_size=batch_size, shuffle=False, num_workers=4
+            )
 class CIFAR100:
     def __init__(self, batch_size=128):
         self.batch_size = batch_size
@@ -159,7 +208,7 @@ def accuracy(output, target, topk=(1,)):
 
         res = []
         for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)  # Replace view() with reshape()
             res.append(correct_k.mul_(100.0 / batch_size))
     return res
 

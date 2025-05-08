@@ -1,6 +1,5 @@
 # model_funcs.py
-# implements the functions for training, testing SDNs and CNNs
-# also implements the functions for computing confusion and confidence
+# Implements training, testing for SDNs and CNNs with support for AdamW and cosine LR schedule.
 
 import torch
 import math
@@ -11,96 +10,75 @@ import random
 import torch.nn as nn
 import numpy as np
 
-from torch.optim import SGD
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from random import choice, shuffle
 from collections import Counter
 
 import aux_funcs as af
 import data
 
-
-def sdn_training_step(optimizer, model, coeffs, batch, device):
+def sdn_training_step(optimizer, model, coeffs, batch, device, loss_type='ce'):
     b_x = batch[0].to(device)
     b_y = batch[1].to(device)
     output = model(b_x)
-    optimizer.zero_grad()  #clear gradients for this training step
+    optimizer.zero_grad()
     total_loss = 0.0
+
+    weight = torch.tensor([4, 1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=torch.float32).to(device)
 
     for ic_id in range(model.num_output - 1):
         cur_output = output[ic_id]
-        cur_loss = float(coeffs[ic_id])*af.get_loss_criterion()(cur_output, b_y)
+
+        if loss_type == 'balanced':
+            cur_loss = float(coeffs[ic_id]) * af.get_BalancedSoftmaxLoss(weight)(cur_output, b_y)
+        elif loss_type == 'weighted':
+            cur_loss = float(coeffs[ic_id]) * af.get_weight_loss(weight)(cur_output, b_y)
+        else:
+            cur_loss = float(coeffs[ic_id]) * af.get_loss_criterion()(cur_output, b_y)
+
         total_loss += cur_loss
 
-    total_loss += af.get_loss_criterion()(output[-1], b_y)
-    total_loss.backward()
-    optimizer.step()                # apply gradients
-
-    return total_loss
-
-def sdn_ic_only_step(optimizer, model, batch, device):
-    b_x = batch[0].to(device)
-    b_y = batch[1].to(device)
-    output = model(b_x)
-    optimizer.zero_grad()  #clear gradients for this training step
-    total_loss = 0.0
-
-    for output_id, cur_output in enumerate(output):
-        if output_id == model.num_output - 1: # last output
-            break
-        
-        cur_loss = af.get_loss_criterion()(cur_output, b_y)
-        total_loss += cur_loss
+    if loss_type == 'balanced':
+        total_loss += af.get_BalancedSoftmaxLoss(weight)(output[-1], b_y)
+    elif loss_type == 'weighted':
+        total_loss += af.get_weight_loss(weight)(output[-1], b_y)
+    else:
+        total_loss += af.get_loss_criterion()(output[-1], b_y)
 
     total_loss.backward()
-    optimizer.step()                # apply gradients
-
+    optimizer.step()
     return total_loss
 
 def get_loader(data, augment):
-    if augment:
-        train_loader = data.aug_train_loader
-    else:
-        train_loader = data.train_loader
+    return data.aug_train_loader if augment else data.train_loader
 
-    return train_loader  
-
-
-def sdn_train(model, data, epochs, optimizer, scheduler, device='cpu'):
+def sdn_train(model, data, epochs, optimizer, scheduler, device='cpu', loss_type='ce'):
     augment = model.augment_training
-    metrics = {'epoch_times':[], 'test_top1_acc':[], 'test_top5_acc':[], 'train_top1_acc':[], 'train_top5_acc':[], 'lrs':[]}
-    max_coeffs = np.array([0.15, 0.3, 0.45, 0.6, 0.75, 0.9]) # max tau_i --- C_i values
+    metrics = {'epoch_times': [], 'test_top1_acc': [], 'test_top5_acc': [], 'train_top1_acc': [], 'train_top5_acc': [], 'lrs': []}
+    max_coeffs = np.array([0.15, 0.3, 0.45, 0.6, 0.75, 0.9])
 
-    if model.ic_only:
-        print('sdn will be converted from a pre-trained CNN...  (The IC-only training)')
-    else:
-        print('sdn will be trained from scratch...(The SDN training)')
+    print('sdn will be trained from scratch...(The SDN training)')
 
-    for epoch in range(1, epochs+1):
+    for epoch in range(1, epochs + 1):
         scheduler.step()
         cur_lr = af.get_lr(optimizer)
         print('\nEpoch: {}/{}'.format(epoch, epochs))
         print('Cur lr: {}'.format(cur_lr))
 
-        if model.ic_only is False:
-            # calculate the IC coeffs for this epoch for the weighted objective function
-            cur_coeffs = 0.01 + epoch*(max_coeffs/epochs) # to calculate the tau at the currect epoch
-            cur_coeffs = np.minimum(max_coeffs, cur_coeffs)
-            print('Cur coeffs: {}'.format(cur_coeffs))
+        cur_coeffs = 0.01 + epoch * (max_coeffs / epochs)
+        cur_coeffs = np.minimum(max_coeffs, cur_coeffs)
+        print('Cur coeffs: {}'.format(cur_coeffs))
 
         start_time = time.time()
         model.train()
         loader = get_loader(data, augment)
         for i, batch in enumerate(loader):
-            if model.ic_only is False:
-                total_loss = sdn_training_step(optimizer, model, cur_coeffs, batch, device)
-            else:
-                total_loss = sdn_ic_only_step(optimizer, model, batch, device)
-
+            total_loss = sdn_training_step(optimizer, model, cur_coeffs, batch, device, loss_type)
             if i % 100 == 0:
                 print('Loss: {}: '.format(total_loss))
 
         top1_test, top5_test = sdn_test(model, data.test_loader, device)
-
         print('Top1 Test accuracies: {}'.format(top1_test))
         print('Top5 Test accuracies: {}'.format(top5_test))
         end_time = time.time()
@@ -110,11 +88,11 @@ def sdn_train(model, data, epochs, optimizer, scheduler, device='cpu'):
 
         top1_train, top5_train = sdn_test(model, get_loader(data, augment), device)
         print('Top1 Train accuracies: {}'.format(top1_train))
-        print('Top5 Train accuracies: {}'.format(top5_train))
+        print('Top5 Train accuracies: {}'.format(top1_train))
         metrics['train_top1_acc'].append(top1_train)
         metrics['train_top5_acc'].append(top5_train)
 
-        epoch_time = int(end_time-start_time)
+        epoch_time = int(end_time - start_time)
         metrics['epoch_times'].append(epoch_time)
         print('Epoch took {} seconds.'.format(epoch_time))
 
@@ -124,13 +102,8 @@ def sdn_train(model, data, epochs, optimizer, scheduler, device='cpu'):
 
 def sdn_test(model, loader, device='cpu'):
     model.eval()
-    top1 = []
-    top5 = []
-    for output_id in range(model.num_output):
-        t1 = data.AverageMeter()
-        t5 = data.AverageMeter()
-        top1.append(t1)
-        top5.append(t5)
+    top1 = [data.AverageMeter() for _ in range(model.num_output)]
+    top5 = [data.AverageMeter() for _ in range(model.num_output)]
 
     with torch.no_grad():
         for batch in loader:
@@ -143,14 +116,8 @@ def sdn_test(model, loader, device='cpu'):
                 top1[output_id].update(prec1[0], b_x.size(0))
                 top5[output_id].update(prec5[0], b_x.size(0))
 
-
-    top1_accs = []
-    top5_accs = []
-
-    for output_id in range(model.num_output):
-        top1_accs.append(top1[output_id].avg.data.cpu().numpy()[()])
-        top5_accs.append(top5[output_id].avg.data.cpu().numpy()[()])
-
+    top1_accs = [m.avg.data.cpu().numpy()[()] for m in top1]
+    top5_accs = [m.avg.data.cpu().numpy()[()] for m in top5]
     return top1_accs, top5_accs
 
 def sdn_get_detailed_results(model, loader, device='cpu'):
@@ -278,6 +245,40 @@ def sdn_test_early_exits(model, loader, device='cpu'):
     top5_acc = top5.avg.data.cpu().numpy()[()]
 
     return top1_acc, top5_acc, early_output_counts, non_conf_output_counts, total_time
+def sdn_test_class_count(model, loader, device='cpu'):
+    model.eval()
+    correct_per_class = [0] * model.num_classes 
+    total_per_class = [0] * model.num_classes
+    early_output_counts = [ [0] * model.num_output for _ in range(model.num_classes) ]
+
+    top1 = data.AverageMeter()
+    top5 = data.AverageMeter()
+    total_time = 0
+    with torch.no_grad():
+        for batch in loader:
+            b_x = batch[0].to(device)
+            b_y = batch[1].to(device)
+            start_time = time.time()
+            output, output_id, is_early = model(b_x)
+            end_time = time.time()
+            total_time+= (end_time - start_time)
+            early_output_counts[b_y.item()][output_id] += 1
+
+
+            prec1, prec5 = data.accuracy(output, b_y, topk=(1, 5))
+            pred = output.argmax(dim=1)  # 获取每个样本的预测类别
+            for i in range(b_x.size(0)):
+                label = b_y[i].item()
+                total_per_class[label] += 1  # 增加该类别的样本总数
+                if pred[i] == label:
+                    correct_per_class[label] += 1
+            top1.update(prec1[0], b_x.size(0))
+            top5.update(prec5[0], b_x.size(0))
+
+    top1_acc = top1.avg.data.cpu().numpy()[()]
+    top5_acc = top5.avg.data.cpu().numpy()[()]
+    accuracy_per_class = [a / b for a, b in zip(correct_per_class, total_per_class)]
+    return top1_acc, top5_acc, early_output_counts, total_time, accuracy_per_class
 
 def cnn_training_step(model, optimizer, data, labels, device='cpu'):
     b_x = data.to(device)   # batch x

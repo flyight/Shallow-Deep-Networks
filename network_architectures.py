@@ -163,6 +163,8 @@ def create_mobilenet(models_path, task, save_type, get_params=False):
 def get_task_params(task):
     if task == 'cifar10':
         return cifar10_params()
+    elif task == 'longtail/cifar10':
+        return cifar10_longtail_params()
     elif task == 'cifar100':
         return cifar100_params()
     elif task == 'tinyimagenet':
@@ -182,6 +184,15 @@ def cifar100_params():
     model_params['num_classes'] = 100
     return model_params
 
+
+def cifar10_longtail_params():
+    model_params = {}
+    model_params['task'] = 'longtail/cifar10'
+    model_params['input_size'] = 32
+    model_params['num_classes'] = 10
+    return model_params
+
+
 def tiny_imagenet_params():
     model_params = {}
     model_params['task'] = 'tinyimagenet'
@@ -189,29 +200,31 @@ def tiny_imagenet_params():
     model_params['num_classes'] = 200
     return model_params
 
+    
 def get_lr_params(model_params):
     model_params['momentum'] = 0.9
+    model_params['optimizer'] = 'AdamW'
+    model_params['scheduler'] = 'CosineAnnealingLR'
 
     network_type = model_params['network_type']
 
     if 'vgg' in network_type or 'wideresnet' in network_type:
         model_params['weight_decay'] = 0.0005
-
     else:
         model_params['weight_decay'] = 0.0001
-    
+
     model_params['learning_rate'] = 0.1
     model_params['epochs'] = 100
     model_params['milestones'] = [35, 60, 85]
     model_params['gammas'] = [0.1, 0.1, 0.1]
+    model_params['T_max'] = model_params['epochs']  # 给Cosine使用
 
-    # SDN ic_only training params
-    model_params['ic_only'] = {}
-    model_params['ic_only']['learning_rate'] = 0.001 # lr for full network training after sdn modification
-    model_params['ic_only']['epochs'] = 25
-    model_params['ic_only']['milestones'] = [15]
-    model_params['ic_only']['gammas'] = [0.1]
-    
+    # 针对长尾数据集，专门的调整
+    if 'longtail' in model_params['task']:
+        model_params['learning_rate'] = 0.01   # 小学习率
+        model_params['epochs'] = 100            # 延长训练? 后面再试
+        model_params['loss_mode'] = 'weighted'  # 先换成加权交叉熵
+        model_params['T_max'] = model_params['epochs']
 
 
 def save_model(model, model_params, models_path, model_name, epoch=-1):

@@ -13,7 +13,7 @@ import copy
 import sys
 import pickle
 import itertools as it
-
+from sklearn.manifold import TSNE
 import matplotlib
 matplotlib.use('Agg')
 
@@ -31,7 +31,7 @@ import network_architectures as arcs
 
 from profiler import profile, profile_sdn
 
-from data import CIFAR10, CIFAR100, TinyImagenet
+from data import CIFAR10, CIFAR100, TinyImagenet,CIFAR10_LT
 
 # to log the output of the experiments to a file
 class Logger(object):
@@ -167,26 +167,30 @@ def get_confusion_scores(outputs, normalize=None, device='cpu'):
 
     return confusion_scores
 
-def get_dataset(dataset, batch_size=128, add_trigger=False):
-    if dataset == 'cifar10':
-        return load_cifar10(batch_size, add_trigger)
-    elif dataset == 'cifar100':
-        return load_cifar100(batch_size)
-    elif dataset == 'tinyimagenet':
-        return load_tinyimagenet(batch_size)
+def get_dataset(task, batch_size=128, add_trigger=False):
+    if task == 'cifar10':
+        return CIFAR10(batch_size=batch_size, add_trigger=False)  # 普通数据集
+    elif task == 'longtail/cifar10':
+        return CIFAR10_LT(batch_size=batch_size)  # 长尾化数据集
+    elif task == 'cifar100':
+        return CIFAR100(batch_size=batch_size, add_trigger=False)  # 普通数据集
+    elif task == 'longtail/cifar100':
+        return CIFAR100(batch_size=batch_size, add_trigger=True)  # 长尾化数据集
+    else:
+        raise ValueError(f"Unknown dataset type: {task}")
 
 
-def load_cifar10(batch_size, add_trigger=False):
-    cifar10_data = CIFAR10(batch_size=batch_size, add_trigger=add_trigger)
-    return cifar10_data
+# def load_cifar10(batch_size, add_trigger=False):
+#     cifar10_data = CIFAR10(batch_size=batch_size, add_trigger=add_trigger)
+#     return cifar10_data
 
-def load_cifar100(batch_size):
-    cifar100_data = CIFAR100(batch_size=batch_size)
-    return cifar100_data
+# def load_cifar100(batch_size):
+#     cifar100_data = CIFAR100(batch_size=batch_size)
+#     return cifar100_data
 
-def load_tinyimagenet(batch_size):
-    tiny_imagenet = TinyImagenet(batch_size=batch_size)
-    return tiny_imagenet
+# def load_tinyimagenet(batch_size):
+#     tiny_imagenet = TinyImagenet(batch_size=batch_size)
+#     return tiny_imagenet
 
 
 def get_output_relative_depths(model):
@@ -258,6 +262,37 @@ def get_sdn_ic_only_optimizer(model, lr_params, stepsize_params):
 
     return optimizer, scheduler
 
+
+def get_adamw_optimizer(model, model_params):
+    """
+    从 model_params 中提取所有 AdamW 超参数并创建优化器。
+
+    Args:
+        model: 神经网络模型
+        model_params: 包含优化器配置的字典
+
+    Returns:
+        optimizer (torch.optim.Optimizer)
+    """
+    params = filter(lambda p: p.requires_grad, model.parameters()) #从 model_params 中提取所有 AdamW 超参数并创建优化器。
+
+    lr = model_params.get('learning_rate', 1e-3)
+    weight_decay = model_params.get('weight_decay', 0)
+    amsgrad = model_params.get('amsgrad', False)
+    betas = model_params.get('betas', (0.9, 0.999))
+    eps = model_params.get('eps', 1e-8)
+
+    optimizer = torch.optim.AdamW(
+        params=params,
+        lr=lr,
+        betas=betas,
+        eps=eps,
+        weight_decay=weight_decay,
+        amsgrad=amsgrad
+    )
+    return optimizer
+
+
 def get_pytorch_device():
     device = 'cpu'
     cuda = torch.cuda.is_available()
@@ -266,11 +301,26 @@ def get_pytorch_device():
         device = 'cuda'
     return device
 
+class BalancedSoftmaxLoss(nn.Module):
+    """
+    Balanced Softmax Loss
+    """
+    def __init__(self, weight):
+        super(BalancedSoftmaxLoss, self).__init__()
+
+        self.sample_per_class = weight
+
+    def forward(self, logits, labels, reduction='mean'):
+        spc = self.sample_per_class.to(logits.device).unsqueeze(0).expand(logits.shape[0], -1)
+        balanced_logits = logits - torch.log(spc)
+        return F.cross_entropy(balanced_logits, labels, reduction=reduction)
 
 def get_loss_criterion():
     return CrossEntropyLoss()
-
-
+def get_weight_loss(class_weight):
+    return CrossEntropyLoss(weight = class_weight)
+def get_BalancedSoftmaxLoss(class_weight):
+    return BalancedSoftmaxLoss(weight = class_weight)
 def get_all_trained_models_info(models_path, use_profiler=False, device='gpu'):
     print('Testing all models in: {}'.format(models_path))
 
@@ -305,7 +355,7 @@ def get_all_trained_models_info(models_path, use_profiler=False, device='gpu'):
                 input_size = model_params['input_size']
 
                 if architecture == 'dsn':
-                    total_ops, total_params = profile_dsn(model, input_size, device)
+                    total_ops, total_params = profile_sdn(model, input_size, device)
                     print("#Ops (GOps): {}".format(total_ops))
                     print("#Params (mil): {}".format(total_params))
 
@@ -450,4 +500,60 @@ def get_tinyimagenet_classes(prediction=None):
         return tinyimagenet_classes[prediction]
 
     return tinyimagenet_classes
+def visualize_tsne(list_data, labels, perplexity=30, n_iter=1000, title="t-SNE Visualization", num_classes=10):
+    # 确保数据是 NumPy 数组
+    list_data = torch.cat(list_data, dim=0)
+    list_data = [tensor.cpu().numpy() for tensor in list_data]
+    
+    # 随机选取样本进行降维
+    sample_indices = range(len(list_data))  # 假设数据量较大，随机抽样
+    print(len(list_data))
+    
+    data = np.array(list_data)
+    data = data[sample_indices]
+    labels = np.array(labels)
 
+    # 使用 t-SNE 进行降维
+    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity, n_iter=n_iter)
+    data_tsne = tsne.fit_transform(data)
+
+    # 可视化
+    plt.figure(figsize=(12, 10))
+    for i in range(num_classes):
+        # 选择当前类别的样本
+        class_indices = np.where(labels == i)[0]
+        # 绘制当前类别的样本，使用不同颜色区分类别
+        plt.scatter(data_tsne[class_indices, 0], data_tsne[class_indices, 1], label=f'Class {i}', s=15)
+
+    # 添加图例和标题
+    plt.legend(loc='best', fontsize=12)
+    plt.title(title, fontsize=14)
+    plt.xlabel("t-SNE Dimension 1", fontsize=12)
+    plt.ylabel("t-SNE Dimension 2", fontsize=12)
+    plt.savefig(f"./outputs/t-sne_{title}_change.png")
+    plt.clf()
+def weighted_loss(ecc):
+    tensor = torch.tensor(ecc)
+    reciprocal_tensor = torch.reciprocal(tensor)
+    return reciprocal_tensor
+def create_imbalanced_dataset(dataset, majority_class, majority_count, minority_count,seed = 4):
+    np.random.seed(seed)
+    targets = np.array(dataset.targets)
+    
+    majority_indices = np.where(targets == majority_class)[0]
+    selected_majority = np.random.choice(majority_indices, size=majority_count, replace=False)
+    selected_minority = []
+    for class_idx in np.unique(targets):
+        if class_idx != majority_class:
+            class_indices = np.where(targets == class_idx)[0]
+            selected = np.random.choice(class_indices, size=minority_count, replace=False)
+            selected_minority.extend(selected)
+    new_indices = np.concatenate([selected_majority, selected_minority])
+    np.random.shuffle(new_indices)  # 打乱顺序
+    dataset.data = dataset.data[new_indices]
+    dataset.targets = targets[new_indices]
+    
+    print(f"新数据集大小：{len(dataset)}")
+    print(f"类别分布：{np.bincount(dataset.targets)}")
+    
+    return dataset

@@ -1,0 +1,32 @@
+# 忽略数据文件或文件夹
+data/
+networks/
+bak/
+outputs/
+
+# 忽略常见数据和模型目录
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.npz
+*.npy
+*.h5
+
+# 忽略训练日志、输出和缓存
+*.log
+*.json
+*.csv
+*.db
+*.sqlite
+
+# 忽略 checkpoints 或模型保存目录
+checkpoints/
+models/
+outputs/
+runs/
+logs/
+
+# 忽略 pyc 缓存文件
+*.pyc
+__pycache__/
