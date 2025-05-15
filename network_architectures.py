@@ -4,14 +4,11 @@
 # also contains the hyper-parameters for model training
 
 import torch
-
 import pickle
 import os
-
 import os.path
 import aux_funcs as af
 import numpy as np
-
 
 from profiler import profile_sdn
 
@@ -27,8 +24,19 @@ from architectures.CNNs.MobileNet import MobileNet
 from architectures.SDNs.WideResNet_SDN import WideResNet_SDN
 from architectures.CNNs.WideResNet import WideResNet
 
+def set_num_classes(model_params):
+    task = model_params.get('task', '')
+    task_key = task.split("/")[-1] if "/" in task else task
+    model_params['num_classes'] = {
+        'cifar10': 10,
+        'cifar100': 100,
+        'tinyimagenet': 200
+    }.get(task_key, 1000)  # fallback 为 ImageNet 类别数
+    print(f"[DEBUG] num_classes set to {model_params['num_classes']} for task '{task}'")
+
 
 def save_networks(model_name, model_params, models_path, save_type):
+    set_num_classes(model_params)  # ✅ ensure safe and consistent class count
     cnn_name = model_name+'_cnn'
     sdn_name = model_name+'_sdn'
 
@@ -46,7 +54,6 @@ def save_networks(model_name, model_params, models_path, save_type):
             model = VGG(model_params)
         elif 'mobilenet' in network_type:
             model = MobileNet(model_params)
-        
 
         save_model(model, model_params, models_path, cnn_name, epoch=0)
 
@@ -55,7 +62,7 @@ def save_networks(model_name, model_params, models_path, save_type):
         model_params['architecture'] = 'sdn'
         model_params['base_model'] = sdn_name
         network_type = model_params['network_type']
-        
+
         if 'wideresnet' in network_type:
             model = WideResNet_SDN(model_params)
         elif 'resnet' in network_type:
@@ -64,15 +71,16 @@ def save_networks(model_name, model_params, models_path, save_type):
             model = VGG_SDN(model_params)
         elif 'mobilenet' in network_type:
             model = MobileNet_SDN(model_params)
-        
+
         save_model(model, model_params, models_path, sdn_name, epoch=0)
-        
+
     return cnn_name, sdn_name
 
 def create_vgg16bn(models_path, task, save_type, get_params=False):
     print('Creating VGG16BN untrained {} models...'.format(task))
-
     model_params = get_task_params(task)
+    set_num_classes(model_params)
+
     if model_params['input_size'] == 32:
         model_params['fc_layers'] = [512, 512]
     elif model_params['input_size'] == 64:
@@ -81,84 +89,68 @@ def create_vgg16bn(models_path, task, save_type, get_params=False):
     model_params['conv_channels']  = [64, 64, 128, 128, 256, 256, 256, 512, 512, 512, 512, 512, 512]
     model_name = '{}_vgg16bn'.format(task)
 
-    # architecture params
     model_params['network_type'] = 'vgg16'
     model_params['max_pool_sizes'] = [1, 2, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 2]
     model_params['conv_batch_norm'] = True
     model_params['init_weights'] = True
     model_params['augment_training'] = True
-    model_params['add_ic'] = [0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0] # 15, 30, 45, 60, 75, 90 percent of GFLOPs
+    model_params['add_ic'] = [0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0]
 
     get_lr_params(model_params)
-    
     if get_params:
         return model_params
-    
     return save_networks(model_name, model_params, models_path, save_type)
-
 
 def create_resnet56(models_path, task, save_type, get_params=False):
     print('Creating resnet56 untrained {} models...'.format(task))
     model_params = get_task_params(task)
+    set_num_classes(model_params)
     model_params['block_type'] = 'basic'
     model_params['num_blocks'] = [9,9,9]
-    model_params['add_ic'] = [[0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 0, 1, 0, 0, 0, 1, 0, 0], [0, 1, 0, 0, 0, 1, 0, 0, 0]] # 15, 30, 45, 60, 75, 90 percent of GFLOPs
-
+    model_params['add_ic'] = [[0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 0, 1, 0, 0, 0, 1, 0, 0], [0, 1, 0, 0, 0, 1, 0, 0, 0]]
     model_name = '{}_resnet56'.format(task)
 
     model_params['network_type'] = 'resnet56'
     model_params['augment_training'] = True
     model_params['init_weights'] = True
-
     get_lr_params(model_params)
-    
-
     if get_params:
         return model_params
-
     return save_networks(model_name, model_params, models_path, save_type)
-
 
 def create_wideresnet32_4(models_path, task, save_type, get_params=False):
     print('Creating wrn32_4 untrained {} models...'.format(task))
     model_params = get_task_params(task)
+    set_num_classes(model_params)
     model_params['num_blocks'] = [5,5,5]
     model_params['widen_factor'] = 4
     model_params['dropout_rate'] = 0.3
-
     model_name = '{}_wideresnet32_4'.format(task)
-
-    model_params['add_ic'] = [[0, 0, 1, 0, 1], [0, 1, 0, 1, 0], [1, 0, 1, 0, 0]]  # 15, 30, 45, 60, 75, 90 percent of GFLOPs
+    model_params['add_ic'] = [[0, 0, 1, 0, 1], [0, 1, 0, 1, 0], [1, 0, 1, 0, 0]]
     model_params['network_type'] = 'wideresnet32_4'
     model_params['augment_training'] = True
     model_params['init_weights'] = True
-
     get_lr_params(model_params)
-
-
     if get_params:
         return model_params
-
     return save_networks(model_name, model_params, models_path, save_type)
-
 
 def create_mobilenet(models_path, task, save_type, get_params=False):
     print('Creating MobileNet untrained {} models...'.format(task))
     model_params = get_task_params(task)
+    set_num_classes(model_params)
     model_name = '{}_mobilenet'.format(task)
-    
     model_params['network_type'] = 'mobilenet'
     model_params['cfg'] = [64, (128,2), 128, (256,2), 256, (512,2), 512, 512, 512, 512, 512, (1024,2), 1024]
     model_params['augment_training'] = True
     model_params['init_weights'] = True
-    model_params['add_ic'] = [0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0] # 15, 30, 45, 60, 75, 90 percent of GFLOPs
-
+    model_params['add_ic'] = [0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0]
     get_lr_params(model_params)
-
     if get_params:
         return model_params
-
     return save_networks(model_name, model_params, models_path, save_type)
+
+# 其他部分保持原样
 
 def get_task_params(task):
     if task == 'cifar10':

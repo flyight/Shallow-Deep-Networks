@@ -296,7 +296,6 @@ def cnn_train(model, data, epochs, optimizer, scheduler, device='cpu'):
 
     for epoch in range(1, epochs+1):
         scheduler.step()
-
         cur_lr = af.get_lr(optimizer)
 
         if not hasattr(model, 'augment_training') or model.augment_training:
@@ -308,8 +307,18 @@ def cnn_train(model, data, epochs, optimizer, scheduler, device='cpu'):
         model.train()
         print('Epoch: {}/{}'.format(epoch, epochs))
         print('Cur lr: {}'.format(cur_lr))
-        for x, y in train_loader:
+
+        # === 打印第一层参数：训练前 ===
+        if epoch == 1:
+            print("[DEBUG] First layer weight BEFORE update:", next(model.parameters()).data.view(-1)[:5])
+
+        for i, (x, y) in enumerate(train_loader):
             cnn_training_step(model, optimizer, x, y, device)
+
+            # === 打印第一层参数：训练后（仅第一个 epoch 的最后一个 batch） ===
+            if epoch == 1 and i == len(train_loader) - 1:
+                print("[DEBUG] First layer weight AFTER update:", next(model.parameters()).data.view(-1)[:5])
+
         
         end_time = time.time()
     
