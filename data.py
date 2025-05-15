@@ -8,7 +8,7 @@ import os
 from torchvision import datasets, transforms, utils
 from torch.utils.data import sampler
 from PIL import Image
-
+from torchvision.transforms.autoaugment import AutoAugment, AutoAugmentPolicy #数据增强
 class AddTrigger(object):
     def __init__(self, square_size=5, square_loc=(26,26)):
         self.square_size = square_size
@@ -61,7 +61,14 @@ class CIFAR10_LT:
 
         # 设置数据增强
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        # self.augmented = transforms.Compose([
+        #     transforms.RandomHorizontalFlip(),
+        #     transforms.RandomCrop(32, padding=4),
+        #     transforms.ToTensor(),
+        #     normalize
+        # ])
         self.augmented = transforms.Compose([
+            AutoAugment(policy=AutoAugmentPolicy.CIFAR10),
             transforms.RandomHorizontalFlip(),
             transforms.RandomCrop(32, padding=4),
             transforms.ToTensor(),

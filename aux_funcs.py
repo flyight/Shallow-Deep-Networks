@@ -169,15 +169,16 @@ def get_confusion_scores(outputs, normalize=None, device='cpu'):
 
 def get_dataset(task, batch_size=128, add_trigger=False):
     if task == 'cifar10':
-        return CIFAR10(batch_size=batch_size, add_trigger=False)  # 普通数据集
+        dataset = CIFAR10(batch_size=batch_size, add_trigger=add_trigger)
     elif task == 'longtail/cifar10':
-        return CIFAR10_LT(batch_size=batch_size)  # 长尾化数据集
+        dataset = CIFAR10_LT(batch_size=batch_size)
     elif task == 'cifar100':
-        return CIFAR100(batch_size=batch_size, add_trigger=False)  # 普通数据集
+        dataset = CIFAR100(batch_size=batch_size, add_trigger=add_trigger)
     elif task == 'longtail/cifar100':
-        return CIFAR100(batch_size=batch_size, add_trigger=True)  # 长尾化数据集
+        dataset = CIFAR100(batch_size=batch_size, add_trigger=add_trigger)
     else:
         raise ValueError(f"Unknown dataset type: {task}")
+    
 
 
 # def load_cifar10(batch_size, add_trigger=False):

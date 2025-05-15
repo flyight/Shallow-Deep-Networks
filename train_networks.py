@@ -15,7 +15,7 @@ import network_architectures as arcs
 
 from architectures.CNNs.VGG import VGG
 
-def train(models_path, untrained_models, sdn=False, ic_only_sdn=False, device='cpu'):
+def train(models_path, untrained_models, sdn=False, device='cpu'):
     print('Training models...')
 
     for base_model in untrained_models:
@@ -30,55 +30,36 @@ def train(models_path, untrained_models, sdn=False, ic_only_sdn=False, device='c
         num_epochs = model_params['epochs']
 
         model_params['optimizer'] = 'SGD'
-
-        if ic_only_sdn:  # IC-only training, freeze the original weights
-            learning_rate = model_params['ic_only']['learning_rate']
-            num_epochs = model_params['ic_only']['epochs']
-            milestones = model_params['ic_only']['milestones']
-            gammas = model_params['ic_only']['gammas']
-
-            model_params['optimizer'] = 'Adam'
-            
-            trained_model.ic_only = True
-
+        trained_model.augment_training = True  # ✅ 强制使用增强数据
 
         optimization_params = (learning_rate, weight_decay, momentum)
         lr_schedule_params = (milestones, gammas)
 
-        if sdn:
-            if ic_only_sdn:
-                optimizer, scheduler = af.get_sdn_ic_only_optimizer(trained_model, optimization_params, lr_schedule_params)
-                trained_model_name = base_model+'_ic_only'
-
-            else:
-                optimizer, scheduler = af.get_full_optimizer(trained_model, optimization_params, lr_schedule_params)
-                trained_model_name = base_model+'_sdn_training'
-
-        else:
-                optimizer, scheduler = af.get_full_optimizer(trained_model, optimization_params, lr_schedule_params)
-                trained_model_name = base_model
+        optimizer, scheduler = af.get_full_optimizer(trained_model, optimization_params, lr_schedule_params)
+        trained_model_name = base_model + ('_sdn_training' if sdn else '')
 
         print('Training: {}...'.format(trained_model_name))
         trained_model.to(device)
         metrics = trained_model.train_func(trained_model, dataset, num_epochs, optimizer, scheduler, device=device)
-        model_params['train_top1_acc'] = metrics['train_top1_acc']
-        model_params['test_top1_acc'] = metrics['test_top1_acc']
-        model_params['train_top5_acc'] = metrics['train_top5_acc']
-        model_params['test_top5_acc'] = metrics['test_top5_acc']
-        model_params['epoch_times'] = metrics['epoch_times']
-        model_params['lrs'] = metrics['lrs']
-        total_training_time = sum(model_params['epoch_times'])
-        model_params['total_time'] = total_training_time
-        print('Training took {} seconds...'.format(total_training_time))
+
+        model_params.update({
+            'train_top1_acc': metrics['train_top1_acc'],
+            'test_top1_acc': metrics['test_top1_acc'],
+            'train_top5_acc': metrics['train_top5_acc'],
+            'test_top5_acc': metrics['test_top5_acc'],
+            'epoch_times': metrics['epoch_times'],
+            'lrs': metrics['lrs'],
+            'total_time': sum(metrics['epoch_times'])
+        })
+
+        print('Training took {} seconds...'.format(model_params['total_time']))
         arcs.save_model(trained_model, model_params, models_path, trained_model_name, epoch=-1)
 
-        # Save the training log
+        # Save training log
         log_file = os.path.join(models_path, trained_model_name + '_log.csv')
-
         with open(log_file, mode='w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['Epoch', 'Train Top1 Acc', 'Train Top5 Acc', 'Test Top1 Acc', 'Test Top5 Acc', 'LR', 'Time(s)'])
-
             for i in range(num_epochs):
                 writer.writerow([
                     i + 1,
@@ -90,29 +71,18 @@ def train(models_path, untrained_models, sdn=False, ic_only_sdn=False, device='c
                     metrics['epoch_times'][i]
                 ])
 
-
-
-def train_sdns(models_path, networks, ic_only=False, device='cpu'):
-    if ic_only: # if we only train the ICs, we load a pre-trained CNN
-        load_epoch = -1
-    else: # if we train both ICs and the orig network, we load an untrained CNN
-        load_epoch = 0
-
+def train_sdns(models_path, networks, device='cpu'):
     for sdn_name in networks:
         cnn_to_tune = sdn_name.replace('sdn', 'cnn')
         sdn_params = arcs.load_params(models_path, sdn_name)
         sdn_params = arcs.get_net_params(sdn_params['network_type'], sdn_params['task'])
-        sdn_model, _ = af.cnn_to_sdn(models_path, cnn_to_tune, sdn_params, load_epoch) # load the CNN and convert it to a SDN
-        arcs.save_model(sdn_model, sdn_params, models_path, sdn_name, epoch=0) # save the resulting SDN
-    train(models_path, networks, sdn=True, ic_only_sdn=ic_only, device=device)
+        sdn_model, _ = af.cnn_to_sdn(models_path, cnn_to_tune, sdn_params, epoch=0)
+        arcs.save_model(sdn_model, sdn_params, models_path, sdn_name, epoch=0)
 
+    train(models_path, networks, sdn=True, device=device)
 
 def train_models(models_path, device='cpu'):
-    tasks = ['cifar10', 
-            #  'cifar100', 
-            #  'tinyimagenet',
-             "longtail/cifar10"]
-
+    tasks = ['cifar10', "longtail/cifar10"]
     cnns = []
     sdns = []
 
@@ -123,9 +93,7 @@ def train_models(models_path, device='cpu'):
         af.extend_lists(cnns, sdns, arcs.create_mobilenet(models_path, task, save_type='cd'))
 
     train(models_path, cnns, sdn=False, device=device)
-    train_sdns(models_path, sdns, ic_only=True, device=device) # train SDNs with IC-only strategy
-    train_sdns(models_path, sdns, ic_only=False, device=device) # train SDNs with SDN-training strategy
-
+    train_sdns(models_path, sdns, device=device)  # full SDN training only
 
 # for backdoored models, load a backdoored CNN and convert it to an SDN via IC-only strategy
 def sdn_ic_only_backdoored(device):
@@ -155,9 +123,11 @@ def main():
     device = af.get_pytorch_device()
     print(f"[INFO] Using device: {device}") #打印当前设备
 
-    models_path = 'networks/{}'.format(af.get_random_seed())
+    # 添加标识符到路径中
+    loss_identifier = "normal_loss_agumented" 
+    models_path = 'networks/{}_{}'.format(af.get_random_seed(), loss_identifier)
     af.create_path(models_path)
-    af.set_logger('outputs/train_models'.format(af.get_random_seed()))
+    af.set_logger('outputs/train_models_{}'.format(loss_identifier))
 
     train_models(models_path, device = device)
     # sdn_ic_only_backdoored(device)

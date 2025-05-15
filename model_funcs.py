@@ -39,12 +39,13 @@ def sdn_training_step(optimizer, model, coeffs, batch, device, loss_type='ce'):
 
         total_loss += cur_loss
 
-    if loss_type == 'balanced':
-        total_loss += af.get_BalancedSoftmaxLoss(weight)(output[-1], b_y)
-    elif loss_type == 'weighted':
-        total_loss += af.get_weight_loss(weight)(output[-1], b_y)
-    else:
-        total_loss += af.get_loss_criterion()(output[-1], b_y)
+    # if loss_type == 'balanced':
+    #     total_loss += af.get_BalancedSoftmaxLoss(weight)(output[-1], b_y)
+    # elif loss_type == 'weighted':
+    #     total_loss += af.get_weight_loss(weight)(output[-1], b_y)
+    # else:
+    #     total_loss += af.get_loss_criterion()(output[-1], b_y)
+    total_loss += af.get_loss_criterion()(output[-1], b_y) #normal total loss
 
     total_loss.backward()
     optimizer.step()
