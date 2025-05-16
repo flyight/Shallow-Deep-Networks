@@ -178,6 +178,8 @@ def get_dataset(task, batch_size=128, add_trigger=False):
         dataset = CIFAR100(batch_size=batch_size, add_trigger=add_trigger)
     else:
         raise ValueError(f"Unknown dataset type: {task}")
+    return dataset
+
     
 
 

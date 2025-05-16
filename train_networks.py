@@ -15,6 +15,9 @@ import network_architectures as arcs
 
 from architectures.CNNs.VGG import VGG
 
+
+
+
 def train(models_path, untrained_models, sdn=False, device='cpu'):
     print('Training models...')
 
@@ -117,6 +120,7 @@ def sdn_ic_only_backdoored(device):
 
     
 def main():
+    # ctypes.windll.kernel32.SetThreadExecutionState(0x80000002)
     random_seed = af.get_random_seed()
     af.set_random_seeds()
     print('Random Seed: {}'.format(random_seed))
